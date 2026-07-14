@@ -2,8 +2,7 @@
 # Ne pas utiliser "latest", pour éviter qu'une mise à jour casse le worker.
 ARG WORKER_VERSION=5.8.6
 
-FROM runpod/worker-comfyui:${WORKER_VERSION}-base
-
+FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
