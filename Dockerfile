@@ -9,7 +9,10 @@ ENV PYTHONUNBUFFERED=1 \
     COMFY_LOG_LEVEL=INFO \
     REFRESH_WORKER=false \
     HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 \
+    POLLEN_PREVIEW_ENABLED=true \
+    POLLEN_PREVIEW_INTERVAL_MS=750 \
+    POLLEN_PREVIEW_MAX_BYTES=500000
 
 
 # Création explicite des dossiers que nous allons utiliser.
@@ -45,15 +48,22 @@ RUN uv pip install -r /comfyui/custom_nodes/RES4LYF/requirements.txt \
 RUN sed -i \
     's/--disable-metadata/--disable-metadata --preview-method auto --preview-size 384/g' \
     /start.sh \
-    && grep -q -- "--preview-method auto" /start.sh
+    && sed -i \
+    's|python -u /handler.py|python -u /opt/pollen/preview_handler.py|g' \
+    /start.sh \
+    && grep -q -- "--preview-method auto" /start.sh \
+    && grep -q -- "/opt/pollen/preview_handler.py" /start.sh
 
 
-# Ajout du script qui connectera le cache Hugging Face à ComfyUI.
-COPY bootstrap.py /opt/pollen/bootstrap.py
+# Ajout du bootstrap modèles et de la couche de preview progressive.
+COPY bootstrap.py preview_bridge.py preview_handler.py /opt/pollen/
 
 
-# Vérifie pendant le build que le script Python est syntaxiquement valide.
-RUN python -m py_compile /opt/pollen/bootstrap.py
+# Vérifie pendant le build que les scripts Python sont syntaxiquement valides.
+RUN python -m py_compile \
+    /opt/pollen/bootstrap.py \
+    /opt/pollen/preview_bridge.py \
+    /opt/pollen/preview_handler.py
 
 
 # Remplace la commande de démarrage officielle :
