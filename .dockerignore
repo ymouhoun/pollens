@@ -1,0 +1,13 @@
+.git
+.gitignore
+README.md
+.env
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+models/
+output/
+input/
+__pycache__/
+*.pyc
