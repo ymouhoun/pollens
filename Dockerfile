@@ -34,7 +34,8 @@ RUN mkdir -p \
 RUN comfy-node-install \
     https://github.com/gseth/ControlAltAI-Nodes \
     https://github.com/ClownsharkBatwing/RES4LYF
-
+RUN uv pip install -r /comfyui/custom_nodes/RES4LYF/requirements.txt \
+    && python -c "import pywt"
 
 # ------------------------------------------------------------
 # PREVIEW COMFYUI
