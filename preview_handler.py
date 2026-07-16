@@ -10,6 +10,7 @@ from typing import Any
 
 import runpod
 
+from face_asset_cache import ensure_face_dependencies
 from preview_bridge import PreviewBridge
 
 
@@ -64,6 +65,7 @@ upstream.websocket.WebSocket.recv = _recv_with_preview
 
 
 def handler(job: dict[str, Any]):
+    ensure_face_dependencies(job)
     enabled = os.environ.get("POLLEN_PREVIEW_ENABLED", "true").lower() == "true"
     if enabled:
         _context.preview_bridge = PreviewBridge(job, _send_progress)

@@ -12,3 +12,5 @@ input/
 __pycache__/
 *.pyc
 test_*.py
+.pytest_cache/
+face-cache/
