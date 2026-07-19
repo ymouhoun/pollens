@@ -5,7 +5,7 @@ ARG WORKER_VERSION=5.8.6
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.6"
+      org.opencontainers.image.version="0.2.8"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -15,6 +15,7 @@ ENV PYTHONUNBUFFERED=1 \
     TRANSFORMERS_OFFLINE=1 \
     POLLEN_PREVIEW_ENABLED=true \
     POLLEN_PREVIEW_INTERVAL_MS=750 \
+    POLLEN_STATUS_INTERVAL_MS=500 \
     POLLEN_PREVIEW_MAX_BYTES=500000 \
     POLLEN_LORA_CACHE_MAX_ITEMS=5
 
@@ -34,6 +35,7 @@ RUN mkdir -p \
     /comfyui/models/ultralytics/segm \
     /comfyui/models/sams \
     /comfyui/models/upscale_models \
+    /comfyui/custom_nodes/z_pollen_face_detailer_retry \
     /opt/pollen/face-cache
 
 
@@ -81,6 +83,11 @@ RUN set -eu; \
 # Échec immédiat du build si les imports qui ont cassé le worker sont absents.
 RUN python -c "import cv2; import pywt; import matplotlib; import huggingface_hub"
 
+# Conserve le FaceDetailer d'Impact Pack et ajoute seulement une relance
+# ciblée lorsqu'un patch raffiné est détecté comme presque entièrement noir.
+COPY pollen_face_detailer_retry.py \
+    /comfyui/custom_nodes/z_pollen_face_detailer_retry/__init__.py
+
 # ------------------------------------------------------------
 # PREVIEW COMFYUI
 # ------------------------------------------------------------
@@ -105,7 +112,8 @@ RUN python -m py_compile \
     /opt/pollen/bootstrap.py \
     /opt/pollen/face_asset_cache.py \
     /opt/pollen/preview_bridge.py \
-    /opt/pollen/preview_handler.py
+    /opt/pollen/preview_handler.py \
+    /comfyui/custom_nodes/z_pollen_face_detailer_retry/__init__.py
 
 
 # Remplace la commande de démarrage officielle :
