@@ -5,7 +5,7 @@ ARG WORKER_VERSION=5.8.6
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.5"
+      org.opencontainers.image.version="0.2.6"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -57,12 +57,29 @@ RUN comfy-node-install \
     https://github.com/ltdrdata/ComfyUI-Impact-Subpack \
     https://github.com/rgthree/rgthree-comfy
 
-# comfy-node-install installe les nodes, mais PyWavelets n'est pas présent dans
-# l'environnement final du worker. On l'ajoute explicitement avec la dépendance
-# propre au cache Hugging Face.
-RUN uv pip install huggingface_hub PyWavelets
+# comfy-node-install clone les nodes mais ne garantit pas l'installation de
+# leurs dépendances Python. Impact Pack et Impact Subpack ont besoin notamment
+# d'OpenCV, tandis que RES4LYF a besoin d'OpenCV, Matplotlib et PyWavelets.
+#
+# On installe directement les requirements des deux packs Impact, sans appeler
+# leur install.py (celui-ci n'est pas adapté au build non interactif RunPod).
+# Pour RES4LYF, on utilise opencv-python-headless, déjà requis par Impact Pack,
+# afin d'éviter d'installer simultanément les variantes GUI et headless.
+RUN set -eu; \
+    test -f /comfyui/custom_nodes/comfyui-impact-pack/requirements.txt; \
+    test -f /comfyui/custom_nodes/comfyui-impact-subpack/requirements.txt; \
+    uv pip install \
+        -r /comfyui/custom_nodes/comfyui-impact-pack/requirements.txt \
+        -r /comfyui/custom_nodes/comfyui-impact-subpack/requirements.txt; \
+    uv pip install \
+        huggingface_hub \
+        PyWavelets \
+        matplotlib \
+        "numpy>=1.26.4" \
+        opencv-python-headless
 
-RUN python -c "import pywt; import huggingface_hub"
+# Échec immédiat du build si les imports qui ont cassé le worker sont absents.
+RUN python -c "import cv2; import pywt; import matplotlib; import huggingface_hub"
 
 # ------------------------------------------------------------
 # PREVIEW COMFYUI
