@@ -5,7 +5,7 @@ ARG WORKER_VERSION=5.8.6
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.3"
+      org.opencontainers.image.version="0.2.4"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -60,9 +60,6 @@ RUN comfy-node-install \
 # comfy-node-install gère déjà les requirements des nodes. On installe ici
 # uniquement la dépendance propre au cache Hugging Face du worker.
 RUN uv pip install huggingface_hub
-
-RUN COMFYUI_PATH=/comfyui COMFYUI_MODEL_PATH=/comfyui/models \
-    python /comfyui/custom_nodes/ComfyUI-Impact-Pack/install.py
 
 RUN python -c "import pywt; import huggingface_hub"
 
