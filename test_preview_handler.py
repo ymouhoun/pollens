@@ -70,12 +70,13 @@ def handler(job):
                 sys.modules.pop("preview_handler", None)
 
         self.assertEqual(result["images"][0]["filename"], "final.png")
-        self.assertEqual(len(updates), 1)
+        self.assertEqual(len(updates), 2)
         self.assertEqual(updates[0][0], job)
-        self.assertEqual(updates[0][1]["step"], 5)
-        self.assertEqual(updates[0][1]["total"], 20)
+        self.assertEqual(updates[0][1]["stage"], "preparing_worker")
+        self.assertEqual(updates[1][1]["step"], 5)
+        self.assertEqual(updates[1][1]["total"], 20)
         self.assertTrue(
-            updates[0][1]["previewImage"].startswith(
+            updates[1][1]["previewImage"].startswith(
                 "data:image/jpeg;base64,"
             )
         )

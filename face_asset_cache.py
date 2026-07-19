@@ -39,6 +39,7 @@ DEFAULT_FACE_ASSETS = (
 
 
 DownloadFunction = Callable[..., str]
+StatusCallback = Callable[[str, str], None]
 _CACHE_LOCK = threading.Lock()
 
 
@@ -136,6 +137,7 @@ class FaceAssetCache:
         source: str,
         target: str,
         pinned: bool,
+        status_callback: StatusCallback | None = None,
     ) -> Path:
         source_path = safe_relative_path(
             source, suffixes=(".safetensors", ".pt", ".pth")
@@ -157,6 +159,8 @@ class FaceAssetCache:
                         resolved_target.is_file()
                         and item_root.resolve() in resolved_target.parents
                     ):
+                        if status_callback:
+                            status_callback("cached", source_path.as_posix())
                         item_root.touch()
                         if not pinned:
                             self._prune_loras(exclude=cache_key)
@@ -164,6 +168,8 @@ class FaceAssetCache:
                 except FileNotFoundError:
                     pass
             item_root.mkdir(parents=True, exist_ok=True)
+            if status_callback:
+                status_callback("downloading", source_path.as_posix())
             downloaded = Path(
                 self.downloader(
                     repo_id=self.repo_id,
@@ -239,7 +245,10 @@ class FaceAssetCache:
             shutil.rmtree(item_root, ignore_errors=True)
 
 
-def ensure_face_dependencies(job: dict[str, Any]) -> None:
+def ensure_face_dependencies(
+    job: dict[str, Any],
+    status_callback: StatusCallback | None = None,
+) -> None:
     """Prepare the selected LoRA and shared models before ComfyUI validates the job."""
     job_input = job.get("input", {})
     if not isinstance(job_input, dict):
@@ -262,6 +271,7 @@ def ensure_face_dependencies(job: dict[str, Any]) -> None:
             source=asset["source"],
             target=asset["target"],
             pinned=True,
+            status_callback=status_callback,
         )
 
     comfy_lora_path = Path("loras", *source_path.parts[1:])
@@ -269,4 +279,5 @@ def ensure_face_dependencies(job: dict[str, Any]) -> None:
         source=source_path.as_posix(),
         target=comfy_lora_path.as_posix(),
         pinned=False,
+        status_callback=status_callback,
     )

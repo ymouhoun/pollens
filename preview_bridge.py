@@ -20,6 +20,72 @@ PREVIEW_IMAGE = 1
 PREVIEW_IMAGE_WITH_METADATA = 4
 
 
+STAGE_LABELS = {
+    "preparing_worker": "Preparing worker",
+    "preparing_face_assets": "Preparing Face Detail assets",
+    "starting_comfy": "Starting ComfyUI",
+    "comfy_ready": "ComfyUI ready",
+    "uploading_source": "Uploading source image",
+    "queueing_workflow": "Sending workflow to ComfyUI",
+    "workflow_queued": "Workflow queued",
+    "loading_models": "Loading models",
+    "detecting_face": "Detecting face",
+    "refining_face": "Refining face",
+    "sampling": "Generating image",
+    "decoding": "Decoding image",
+    "refining_details": "Refining details",
+    "saving": "Saving image",
+    "finalizing": "Finalizing",
+    "executing": "Executing workflow",
+}
+
+
+def _workflow_node(job: dict[str, Any], node_id: Any) -> dict[str, Any] | None:
+    workflow = job.get("input", {}).get("workflow", {})
+    if not isinstance(workflow, dict):
+        return None
+    node = workflow.get(str(node_id))
+    return node if isinstance(node, dict) else None
+
+
+def stage_for_node(job: dict[str, Any], node_id: Any) -> tuple[str, str, str]:
+    """Translate the currently executing ComfyUI node into a studio stage."""
+    node = _workflow_node(job, node_id) or {}
+    class_type = str(node.get("class_type") or "")
+    metadata = node.get("_meta") if isinstance(node.get("_meta"), dict) else {}
+    title = str(metadata.get("title") or class_type or f"Node {node_id}")
+    searchable = f"{class_type} {title}".lower()
+
+    if any(
+        token in searchable
+        for token in (
+            "loader",
+            "load diffusion",
+            "load clip",
+            "load vae",
+            "load lora",
+            "power lora",
+        )
+    ):
+        stage = "loading_models"
+    elif "pollenfacedetailer" in searchable or "facedetailer" in searchable:
+        stage = "refining_face"
+    elif any(token in searchable for token in ("ultralytics", "detector", "samloader")):
+        stage = "detecting_face"
+    elif any(token in searchable for token in ("ksampler", "samplercustom", "sampler")):
+        stage = "sampling"
+    elif any(token in searchable for token in ("vaedecode", "vae decode", "decode")):
+        stage = "decoding"
+    elif any(token in searchable for token in ("upscale", "imagescale")):
+        stage = "refining_details"
+    elif any(token in searchable for token in ("saveimage", "save image", "output")):
+        stage = "saving"
+    else:
+        stage = "executing"
+
+    return stage, STAGE_LABELS[stage], title
+
+
 def _positive_int(value: Any, default: int) -> int:
     try:
         parsed = int(value)
@@ -151,22 +217,124 @@ class PreviewBridge:
         self.clock = clock
         self.step = 0
         self.total = infer_workflow_steps(job)
-        self.last_sent_at = float("-inf")
+        self.stage = "preparing_worker"
+        self.stage_label = STAGE_LABELS[self.stage]
+        self.detail: str | None = None
+        self.current_node_id: str | None = None
+        self.last_preview_sent_at = float("-inf")
+        self.last_status_sent_at = float("-inf")
+        self.last_status_signature: tuple[Any, ...] | None = None
         self.interval_seconds = _positive_int(
             os.environ.get("POLLEN_PREVIEW_INTERVAL_MS"), 750
+        ) / 1000
+        self.status_interval_seconds = _positive_int(
+            os.environ.get("POLLEN_STATUS_INTERVAL_MS"), 500
         ) / 1000
         self.max_bytes = _positive_int(
             os.environ.get("POLLEN_PREVIEW_MAX_BYTES"), 500_000
         )
+        self.previews_enabled = (
+            os.environ.get("POLLEN_PREVIEW_ENABLED", "true").lower() == "true"
+        )
+
+    def _payload(self, **extra: Any) -> dict[str, Any]:
+        payload = {
+            "stage": self.stage,
+            "stageLabel": self.stage_label,
+            "detail": self.detail,
+            "step": self.step,
+            "total": self.total,
+        }
+        payload.update(extra)
+        return payload
+
+    def publish_stage(
+        self,
+        stage: str,
+        label: str | None = None,
+        detail: str | None = None,
+        *,
+        force: bool = True,
+    ) -> None:
+        previous = (self.stage, self.stage_label, self.detail)
+        self.stage = stage
+        self.stage_label = label or STAGE_LABELS.get(stage, stage.replace("_", " ").title())
+        self.detail = detail
+        signature = (self.stage, self.stage_label, self.detail, self.step, self.total)
+        now = self.clock()
+        stage_changed = previous != (self.stage, self.stage_label, self.detail)
+        if not force and not stage_changed:
+            if now - self.last_status_sent_at < self.status_interval_seconds:
+                return
+            if signature == self.last_status_signature:
+                return
+        self.send_update(self.job, self._payload())
+        self.last_status_sent_at = now
+        self.last_status_signature = signature
+        print(
+            "pollen-status - Published stage "
+            f"{self.stage} ({self.detail or self.stage_label})"
+        )
+
+    def _observe_json(self, message: str) -> None:
+        try:
+            payload = json.loads(message)
+        except (TypeError, json.JSONDecodeError):
+            return
+
+        event_type = payload.get("type")
+        data = payload.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
+
+        if event_type == "execution_start":
+            self.publish_stage("workflow_queued", STAGE_LABELS["workflow_queued"])
+            return
+
+        if event_type == "executing":
+            node_id = data.get("node")
+            if node_id is None:
+                self.publish_stage("finalizing", STAGE_LABELS["finalizing"])
+                return
+            self.current_node_id = str(node_id)
+            stage, label, detail = stage_for_node(self.job, node_id)
+            self.publish_stage(stage, label, detail)
+            return
+
+        if event_type == "execution_success":
+            self.publish_stage("finalizing", STAGE_LABELS["finalizing"])
+            return
+
+        progress = extract_progress(message)
+        if not progress:
+            return
+        self.step, self.total = progress
+        if self.stage != "refining_face":
+            self.stage = "sampling"
+            self.stage_label = STAGE_LABELS[self.stage]
+            node = _workflow_node(self.job, self.current_node_id)
+            metadata = node.get("_meta") if isinstance(node, dict) else None
+            self.detail = (
+                str(metadata.get("title"))
+                if isinstance(metadata, dict) and metadata.get("title")
+                else self.detail
+            )
+        self.publish_stage(
+            self.stage,
+            self.stage_label,
+            self.detail,
+            force=False,
+        )
 
     def observe(self, message: str | bytes) -> None:
         if isinstance(message, str):
-            progress = extract_progress(message)
-            if progress:
-                self.step, self.total = progress
+            self._observe_json(message)
             return
 
         if not isinstance(message, (bytes, bytearray)):
+            return
+
+        if not self.previews_enabled:
             return
 
         decoded = decode_binary_preview(bytes(message))
@@ -182,19 +350,15 @@ class PreviewBridge:
             return
 
         now = self.clock()
-        if now - self.last_sent_at < self.interval_seconds:
+        if now - self.last_preview_sent_at < self.interval_seconds:
             return
 
         encoded = base64.b64encode(image).decode("ascii")
         self.send_update(
             self.job,
-            {
-                "step": self.step,
-                "total": self.total,
-                "previewImage": f"data:{mime_type};base64,{encoded}",
-            },
+            self._payload(previewImage=f"data:{mime_type};base64,{encoded}"),
         )
-        self.last_sent_at = now
+        self.last_preview_sent_at = now
         print(
             "pollen-preview - Published preview "
             f"step={self.step}/{self.total} bytes={len(image)}"

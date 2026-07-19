@@ -59,18 +59,79 @@ def _recv_with_preview(socket, *args, **kwargs):
     return message
 
 
+def _publish_stage(stage: str, label: str, detail: str | None = None) -> None:
+    bridge = getattr(_context, "preview_bridge", None)
+    if bridge is not None:
+        bridge.publish_stage(stage, label, detail)
+
+
+def _wrap_upstream_function(
+    name: str,
+    before: tuple[str, str, str | None],
+    after: tuple[str, str, str | None] | None = None,
+) -> None:
+    original = getattr(upstream, name, None)
+    if original is None:
+        return
+
+    def wrapped(*args, **kwargs):
+        _publish_stage(*before)
+        result = original(*args, **kwargs)
+        if after is not None and (name != "check_server" or result):
+            _publish_stage(*after)
+        return result
+
+    setattr(upstream, name, wrapped)
+
+
 # The official handler keeps receiving every message and remains responsible
 # for completion, reconnection, history retrieval and final image encoding.
 upstream.websocket.WebSocket.recv = _recv_with_preview
+_wrap_upstream_function(
+    "check_server",
+    ("starting_comfy", "Starting ComfyUI", None),
+    ("comfy_ready", "ComfyUI ready", None),
+)
+_wrap_upstream_function(
+    "upload_images",
+    ("uploading_source", "Uploading source image", None),
+)
+_wrap_upstream_function(
+    "queue_workflow",
+    ("queueing_workflow", "Sending workflow to ComfyUI", None),
+    ("workflow_queued", "Workflow queued", None),
+)
+_wrap_upstream_function(
+    "get_history",
+    ("finalizing", "Collecting output", None),
+)
+_wrap_upstream_function(
+    "get_image_data",
+    ("finalizing", "Downloading final image", None),
+)
 
 
 def handler(job: dict[str, Any]):
-    ensure_face_dependencies(job)
-    enabled = os.environ.get("POLLEN_PREVIEW_ENABLED", "true").lower() == "true"
-    if enabled:
-        _context.preview_bridge = PreviewBridge(job, _send_progress)
-        print("pollen-preview - Progressive previews enabled")
+    _context.preview_bridge = PreviewBridge(job, _send_progress)
+    bridge = _context.preview_bridge
     try:
+        bridge.publish_stage("preparing_worker", "Preparing worker")
+
+        def face_asset_status(state: str, source: str) -> None:
+            filename = os.path.basename(source)
+            detail = (
+                f"Downloading {filename}"
+                if state == "downloading"
+                else f"Using cached {filename}"
+            )
+            bridge.publish_stage(
+                "preparing_face_assets",
+                "Preparing Face Detail assets",
+                detail,
+            )
+
+        ensure_face_dependencies(job, status_callback=face_asset_status)
+        print("pollen-preview - Structured ComfyUI progress enabled")
         return upstream.handler(job)
     finally:
         if hasattr(_context, "preview_bridge"):

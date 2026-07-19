@@ -38,20 +38,30 @@ class FaceAssetCacheTests(unittest.TestCase):
     def test_reuses_cached_file_without_downloading_again(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cache, calls = self.make_cache(Path(temp_dir))
+            statuses = []
             first = cache.ensure(
                 source="loras/carlotta.safetensors",
                 target="loras/carlotta.safetensors",
                 pinned=False,
+                status_callback=lambda state, source: statuses.append((state, source)),
             )
             second = cache.ensure(
                 source="loras/carlotta.safetensors",
                 target="loras/carlotta.safetensors",
                 pinned=False,
+                status_callback=lambda state, source: statuses.append((state, source)),
             )
 
             self.assertEqual(first, second)
             self.assertTrue(first.is_symlink())
             self.assertEqual(calls, ["loras/carlotta.safetensors"])
+            self.assertEqual(
+                statuses,
+                [
+                    ("downloading", "loras/carlotta.safetensors"),
+                    ("cached", "loras/carlotta.safetensors"),
+                ],
+            )
 
     def test_lru_prunes_old_lora_but_keeps_pinned_assets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
