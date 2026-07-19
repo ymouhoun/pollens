@@ -5,7 +5,7 @@ ARG WORKER_VERSION=5.8.6
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.2"
+      org.opencontainers.image.version="0.2.3"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -46,25 +46,25 @@ RUN mkdir -p \
 # - Impact Pack fournit FaceDetailer et SAMLoader
 # - Impact Subpack fournit les détecteurs Ultralytics
 # - rgthree fournit le Power LoRA Loader
+# Empêche Impact Pack de télécharger SAM dans l'image : le worker le récupère
+# depuis le dépôt Hugging Face partagé lors du premier Face Detail.
+RUN touch /comfyui/custom_nodes/skip_download_model
+
 RUN comfy-node-install \
     https://github.com/gseth/ControlAltAI-Nodes \
     https://github.com/ClownsharkBatwing/RES4LYF \
     https://github.com/ltdrdata/ComfyUI-Impact-Pack \
     https://github.com/ltdrdata/ComfyUI-Impact-Subpack \
     https://github.com/rgthree/rgthree-comfy
-RUN set -eu; \
-    for requirements in \
-        /comfyui/custom_nodes/RES4LYF/requirements.txt \
-        /comfyui/custom_nodes/ComfyUI-Impact-Pack/requirements.txt \
-        /comfyui/custom_nodes/ComfyUI-Impact-Subpack/requirements.txt \
-        /comfyui/custom_nodes/rgthree-comfy/requirements.txt; do \
-        if [ -f "$requirements" ]; then uv pip install -r "$requirements"; fi; \
-    done; \
-    uv pip install huggingface_hub; \
-    touch /comfyui/custom_nodes/skip_download_model; \
-    COMFYUI_PATH=/comfyui COMFYUI_MODEL_PATH=/comfyui/models \
-        python /comfyui/custom_nodes/ComfyUI-Impact-Pack/install.py; \
-    python -c "import pywt; import huggingface_hub"
+
+# comfy-node-install gère déjà les requirements des nodes. On installe ici
+# uniquement la dépendance propre au cache Hugging Face du worker.
+RUN uv pip install huggingface_hub
+
+RUN COMFYUI_PATH=/comfyui COMFYUI_MODEL_PATH=/comfyui/models \
+    python /comfyui/custom_nodes/ComfyUI-Impact-Pack/install.py
+
+RUN python -c "import pywt; import huggingface_hub"
 
 # ------------------------------------------------------------
 # PREVIEW COMFYUI
