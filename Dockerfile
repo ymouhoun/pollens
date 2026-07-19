@@ -4,6 +4,9 @@ ARG WORKER_VERSION=5.8.6
 
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
+LABEL org.opencontainers.image.title="pollens-worker" \
+      org.opencontainers.image.version="0.2.2"
+
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
     COMFY_LOG_LEVEL=INFO \
