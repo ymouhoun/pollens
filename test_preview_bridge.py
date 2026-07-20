@@ -8,6 +8,7 @@ from unittest.mock import patch
 from preview_bridge import (
     PreviewBridge,
     decode_binary_preview,
+    extract_prompt_enhancer_metadata,
     extract_progress,
     stage_for_node,
 )
@@ -39,6 +40,37 @@ class PreviewProtocolTests(unittest.TestCase):
 
 
 class PreviewBridgeTests(unittest.TestCase):
+    def test_extracts_prompt_enhancer_outputs_from_history(self):
+        job = {
+            "input": {
+                "workflow": {
+                    "807": {
+                        "class_type": "LLMPromptEnhancer",
+                        "inputs": {"style_preset": "ambrojo_bw"},
+                    }
+                }
+            }
+        }
+        history = {
+            "prompt-id": {
+                "outputs": {
+                    "807": {
+                        "text": ["Enhanced editorial description"],
+                        "negative_prompt": ["cgi, plastic skin"],
+                        "style_preset": ["ambrojo_bw"],
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            extract_prompt_enhancer_metadata(job, history),
+            {
+                "enhancedPrompt": "Enhanced editorial description",
+                "enhancedNegativePrompt": "cgi, plastic skin",
+                "enhancerPreset": "ambrojo_bw",
+            },
+        )
+
     def test_publishes_data_uri_and_throttles(self):
         sent = []
         now = [10.0]
@@ -102,6 +134,27 @@ class PreviewBridgeTests(unittest.TestCase):
         self.assertEqual(
             stage_for_node(job, "900"),
             ("refining_face", "Refining face", "Face Detail"),
+        )
+
+    def test_reports_prompt_enhancer_before_model_loading(self):
+        job = {
+            "input": {
+                "workflow": {
+                    "807": {
+                        "class_type": "LLMPromptEnhancer",
+                        "inputs": {},
+                        "_meta": {"title": "LLM Prompt Enhancer (GPU)"},
+                    },
+                }
+            }
+        }
+        self.assertEqual(
+            stage_for_node(job, "807"),
+            (
+                "enhancing_prompt",
+                "Enhancing prompt · Qwen 8B",
+                "LLM Prompt Enhancer (GPU)",
+            ),
         )
 
     def test_reports_shark_sampler_as_sampling(self):

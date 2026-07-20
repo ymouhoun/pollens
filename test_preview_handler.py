@@ -40,12 +40,26 @@ class PreviewHandlerIntegrationTests(unittest.TestCase):
         upstream_source = """
 import websocket
 
+def get_history(prompt_id):
+    return {
+        prompt_id: {
+            "outputs": {
+                "807": {
+                    "text": ["Enhanced prompt from Qwen"],
+                    "negative_prompt": ["cgi, plastic skin"],
+                    "style_preset": ["editorial"],
+                }
+            }
+        }
+    }
+
 def handler(job):
     socket = websocket.WebSocket()
     socket.recv()
     socket.recv()
+    get_history("prompt-id")
     return {"images": [{"filename": "final.png"}]}
-"""
+        """
 
         with tempfile.TemporaryDirectory() as temp_dir:
             upstream_path = Path(temp_dir) / "handler.py"
@@ -65,12 +79,25 @@ def handler(job):
             ):
                 sys.modules.pop("preview_handler", None)
                 module = importlib.import_module("preview_handler")
-                job = {"id": "test", "input": {"workflow": {}}}
+                job = {
+                    "id": "test",
+                    "input": {
+                        "workflow": {
+                            "807": {
+                                "class_type": "LLMPromptEnhancer",
+                                "inputs": {"style_preset": "editorial"},
+                            }
+                        }
+                    },
+                }
                 result = module.handler(job)
                 sys.modules.pop("preview_handler", None)
 
         self.assertEqual(result["images"][0]["filename"], "final.png")
-        self.assertEqual(len(updates), 2)
+        self.assertEqual(result["enhancedPrompt"], "Enhanced prompt from Qwen")
+        self.assertEqual(result["enhancedNegativePrompt"], "cgi, plastic skin")
+        self.assertEqual(result["enhancerPreset"], "editorial")
+        self.assertEqual(len(updates), 3)
         self.assertEqual(updates[0][0], job)
         self.assertEqual(updates[0][1]["stage"], "preparing_worker")
         self.assertEqual(updates[1][1]["step"], 5)
@@ -80,6 +107,7 @@ def handler(job):
                 "data:image/jpeg;base64,"
             )
         )
+        self.assertEqual(updates[2][1]["stage"], "finalizing")
 
 
 if __name__ == "__main__":

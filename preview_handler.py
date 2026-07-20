@@ -11,7 +11,7 @@ from typing import Any
 import runpod
 
 from face_asset_cache import ensure_face_dependencies
-from preview_bridge import PreviewBridge
+from preview_bridge import PreviewBridge, extract_prompt_enhancer_metadata
 
 
 UPSTREAM_HANDLER_PATH = os.environ.get(
@@ -102,17 +102,31 @@ _wrap_upstream_function(
     ("workflow_queued", "Workflow queued", None),
 )
 _wrap_upstream_function(
-    "get_history",
-    ("finalizing", "Collecting output", None),
-)
-_wrap_upstream_function(
     "get_image_data",
     ("finalizing", "Downloading final image", None),
 )
 
 
+def _wrap_history_capture() -> None:
+    original = getattr(upstream, "get_history", None)
+    if original is None:
+        return
+
+    def wrapped(*args, **kwargs):
+        _publish_stage("finalizing", "Collecting output")
+        history = original(*args, **kwargs)
+        _context.prompt_history = history
+        return history
+
+    upstream.get_history = wrapped
+
+
+_wrap_history_capture()
+
+
 def handler(job: dict[str, Any]):
     _context.preview_bridge = PreviewBridge(job, _send_progress)
+    _context.prompt_history = None
     bridge = _context.preview_bridge
     try:
         bridge.publish_stage("preparing_worker", "Preparing worker")
@@ -132,10 +146,20 @@ def handler(job: dict[str, Any]):
 
         ensure_face_dependencies(job, status_callback=face_asset_status)
         print("pollen-preview - Structured ComfyUI progress enabled")
-        return upstream.handler(job)
+        result = upstream.handler(job)
+        if isinstance(result, dict):
+            result.update(
+                extract_prompt_enhancer_metadata(
+                    job,
+                    getattr(_context, "prompt_history", None),
+                )
+            )
+        return result
     finally:
         if hasattr(_context, "preview_bridge"):
             del _context.preview_bridge
+        if hasattr(_context, "prompt_history"):
+            del _context.prompt_history
 
 
 if __name__ == "__main__":

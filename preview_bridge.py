@@ -28,6 +28,7 @@ STAGE_LABELS = {
     "uploading_source": "Uploading source image",
     "queueing_workflow": "Sending workflow to ComfyUI",
     "workflow_queued": "Workflow queued",
+    "enhancing_prompt": "Enhancing prompt · Qwen 8B",
     "loading_models": "Loading models",
     "detecting_face": "Detecting face",
     "refining_face": "Refining face",
@@ -56,7 +57,9 @@ def stage_for_node(job: dict[str, Any], node_id: Any) -> tuple[str, str, str]:
     title = str(metadata.get("title") or class_type or f"Node {node_id}")
     searchable = f"{class_type} {title}".lower()
 
-    if any(
+    if "llmpromptenhancer" in searchable or "prompt enhancer" in searchable:
+        stage = "enhancing_prompt"
+    elif any(
         token in searchable
         for token in (
             "loader",
@@ -84,6 +87,68 @@ def stage_for_node(job: dict[str, Any], node_id: Any) -> tuple[str, str, str]:
         stage = "executing"
 
     return stage, STAGE_LABELS[stage], title
+
+
+def _first_history_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if isinstance(item, str):
+                return item
+    return None
+
+
+def _history_output_maps(value: Any):
+    if not isinstance(value, dict):
+        return
+    outputs = value.get("outputs")
+    if isinstance(outputs, dict):
+        yield outputs
+    for nested in value.values():
+        if isinstance(nested, dict):
+            yield from _history_output_maps(nested)
+
+
+def extract_prompt_enhancer_metadata(
+    job: dict[str, Any], history: Any
+) -> dict[str, str]:
+    """Extract the enhancer's actual text outputs from ComfyUI history."""
+    workflow = job.get("input", {}).get("workflow", {})
+    if not isinstance(workflow, dict):
+        return {}
+
+    enhancer_nodes = {
+        str(node_id): node
+        for node_id, node in workflow.items()
+        if isinstance(node, dict)
+        and str(node.get("class_type") or "").lower() == "llmpromptenhancer"
+    }
+    if not enhancer_nodes:
+        return {}
+
+    metadata: dict[str, str] = {}
+    node_id, workflow_node = next(iter(enhancer_nodes.items()))
+    inputs = workflow_node.get("inputs", {})
+    if isinstance(inputs, dict) and isinstance(inputs.get("style_preset"), str):
+        metadata["enhancerPreset"] = inputs["style_preset"]
+
+    for outputs in _history_output_maps(history):
+        node_output = outputs.get(node_id)
+        if not isinstance(node_output, dict):
+            continue
+        enhanced = _first_history_text(node_output.get("text"))
+        negative = _first_history_text(node_output.get("negative_prompt"))
+        preset = _first_history_text(node_output.get("style_preset"))
+        if enhanced:
+            metadata["enhancedPrompt"] = enhanced
+        if negative:
+            metadata["enhancedNegativePrompt"] = negative
+        if preset:
+            metadata["enhancerPreset"] = preset
+        break
+
+    return metadata
 
 
 def _positive_int(value: Any, default: int) -> int:

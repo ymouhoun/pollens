@@ -1,11 +1,53 @@
 # Version figée du worker officiel RunPod ComfyUI.
 # Ne pas utiliser "latest", pour éviter qu'une mise à jour casse le worker.
 ARG WORKER_VERSION=5.8.6
+ARG CUDA_VERSION=12.8.1
+
+# llama-cpp-python doit correspondre à Python 3.12, utilisé par worker-comfyui
+# 5.8.6. Le wheel contient les kernels des trois familles GPU autorisées par
+# Pollens et est construit une seule fois dans une couche Docker réutilisable.
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04 AS llm-enhancer-wheel-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG LLAMA_CPP_PYTHON_VERSION=0.3.34
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        python3 \
+        python3-dev \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/llama-build \
+    && /opt/llama-build/bin/python -m pip install --no-cache-dir \
+        pip==25.1.1 \
+        setuptools==80.9.0 \
+        wheel==0.45.1 \
+        scikit-build-core==0.11.6
+
+ENV CMAKE_ARGS="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=90-real;100-real;120-real;120-virtual" \
+    FORCE_CMAKE=1 \
+    CMAKE_BUILD_PARALLEL_LEVEL=8
+
+RUN mkdir -p /wheelhouse \
+    && /opt/llama-build/bin/python -m pip wheel \
+        --no-cache-dir \
+        --no-build-isolation \
+        --no-deps \
+        --no-binary=llama-cpp-python \
+        --wheel-dir=/wheelhouse \
+        llama-cpp-python==${LLAMA_CPP_PYTHON_VERSION}
+
+COPY verify_llama_cuda_wheel.py /opt/verify_llama_cuda_wheel.py
+RUN /opt/llama-build/bin/python /opt/verify_llama_cuda_wheel.py /wheelhouse
 
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.12"
+      org.opencontainers.image.version="0.3.0"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -18,6 +60,10 @@ ENV PYTHONUNBUFFERED=1 \
     POLLEN_STATUS_INTERVAL_MS=500 \
     POLLEN_PREVIEW_MAX_BYTES=500000 \
     POLLEN_LORA_CACHE_MAX_ITEMS=5 \
+    LLM_ENHANCER_WORKER_PYTHON=/opt/llm-enhancer-venv/bin/python \
+    LLM_ENHANCER_GPU_TIMEOUT_SECONDS=900 \
+    LLM_ENHANCER_STRICT_BACKEND_VERSION=1 \
+    LLM_ENHANCER_LLAMA_CPP_VERSION=0.3.34 \
     COMFY_EXTRA_ARGS=--highvram
 
 
@@ -30,6 +76,7 @@ RUN mkdir -p \
     /comfyui/models/vae \
     /comfyui/models/clip \
     /comfyui/models/text_encoders \
+    /comfyui/models/llm_gguf \
     /comfyui/models/loras \
     /comfyui/models/controlnet \
     /comfyui/models/ultralytics/bbox \
@@ -37,6 +84,19 @@ RUN mkdir -p \
     /comfyui/models/sams \
     /comfyui/models/upscale_models \
     /opt/pollen/face-cache
+
+# Runtime isolé du Prompt Enhancer. ComfyUI ne charge jamais llama-cpp-python
+# dans son propre processus : le custom node dialogue avec ce venv par un
+# worker JSON-lines persistant.
+RUN python -m venv /opt/llm-enhancer-venv
+COPY prompt_enhancer_V2/requirements-runtime.lock /tmp/llm-enhancer-requirements.lock
+RUN /opt/llm-enhancer-venv/bin/python -m pip install --no-cache-dir \
+        -r /tmp/llm-enhancer-requirements.lock
+COPY --from=llm-enhancer-wheel-builder /wheelhouse/ /opt/llm-enhancer-wheelhouse/
+RUN /opt/llm-enhancer-venv/bin/python -m pip install --no-cache-dir --no-deps \
+        /opt/llm-enhancer-wheelhouse/llama_cpp_python-*.whl \
+    && /opt/llm-enhancer-venv/bin/python -c \
+        "import llama_cpp; assert llama_cpp.__version__ == '0.3.34'; assert llama_cpp.llama_supports_gpu_offload()"
 
 
 # ------------------------------------------------------------
@@ -58,6 +118,9 @@ RUN comfy-node-install \
     https://github.com/ltdrdata/ComfyUI-Impact-Pack \
     https://github.com/ltdrdata/ComfyUI-Impact-Subpack \
     https://github.com/rgthree/rgthree-comfy
+
+# Source runtime du node LLM Prompt Enhancer et presets Pollens.
+COPY prompt_enhancer_V2 /comfyui/custom_nodes/prompt_enhancer_V2
 
 # comfy-node-install clone les nodes mais ne garantit pas l'installation de
 # leurs dépendances Python. Impact Pack et Impact Subpack ont besoin notamment
@@ -134,7 +197,16 @@ RUN python -m py_compile \
     /opt/pollen/face_asset_cache.py \
     /opt/pollen/preview_bridge.py \
     /opt/pollen/preview_handler.py \
-    /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/pollen_face_detailer_retry.py
+    /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/pollen_face_detailer_retry.py \
+    /comfyui/custom_nodes/prompt_enhancer_V2/enhancer_node.py \
+    /comfyui/custom_nodes/prompt_enhancer_V2/gpu_runtime.py \
+    /comfyui/custom_nodes/prompt_enhancer_V2/gpu_worker.py \
+    /comfyui/custom_nodes/prompt_enhancer_V2/preset_store.py \
+    /comfyui/custom_nodes/prompt_enhancer_V2/prompt_logic.py
+
+RUN cd /comfyui \
+    && PYTHONPATH=/comfyui:/comfyui/custom_nodes python -c \
+        "import prompt_enhancer_V2 as plugin; assert 'LLMPromptEnhancer' in plugin.NODE_CLASS_MAPPINGS"
 
 
 # Remplace la commande de démarrage officielle :
