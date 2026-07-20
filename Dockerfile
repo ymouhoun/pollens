@@ -5,7 +5,7 @@ ARG WORKER_VERSION=5.8.6
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.9"
+      org.opencontainers.image.version="0.2.10"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -35,7 +35,6 @@ RUN mkdir -p \
     /comfyui/models/ultralytics/segm \
     /comfyui/models/sams \
     /comfyui/models/upscale_models \
-    /comfyui/custom_nodes/z_pollen_face_detailer_retry \
     /opt/pollen/face-cache
 
 
@@ -85,8 +84,24 @@ RUN python -c "import cv2; import pywt; import matplotlib; import huggingface_hu
 
 # Conserve le FaceDetailer d'Impact Pack et ajoute seulement une relance
 # ciblée lorsqu'un patch raffiné est détecté comme presque entièrement noir.
+#
+# Le wrapper est enregistré depuis Impact Pack lui-même. Un dossier custom
+# node séparé ne serait pas fiable ici : ComfyUI parcourt os.listdir() sans
+# garantir qu'Impact Pack sera importé avant les modules qui en dépendent.
 COPY pollen_face_detailer_retry.py \
-    /comfyui/custom_nodes/z_pollen_face_detailer_retry/__init__.py
+    /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/pollen_face_detailer_retry.py
+
+RUN sed -i \
+    '/^__all__ =/i\from impact.pollen_face_detailer_retry import PollenFaceDetailerAutoRetry\nNODE_CLASS_MAPPINGS["PollenFaceDetailerAutoRetry"] = PollenFaceDetailerAutoRetry\nNODE_DISPLAY_NAME_MAPPINGS["PollenFaceDetailerAutoRetry"] = "FaceDetailer (Pollen auto retry)"\n' \
+    /comfyui/custom_nodes/comfyui-impact-pack/__init__.py \
+    && grep -q 'NODE_CLASS_MAPPINGS\["PollenFaceDetailerAutoRetry"\]' \
+    /comfyui/custom_nodes/comfyui-impact-pack/__init__.py
+
+# Valide les imports réels au build, pas seulement la syntaxe Python. Cela
+# évite qu'un node absent ne soit découvert qu'au moment d'une requête.
+RUN cd /comfyui \
+    && PYTHONPATH=/comfyui:/comfyui/custom_nodes/comfyui-impact-pack/modules \
+    python -c "from impact.pollen_face_detailer_retry import PollenFaceDetailerAutoRetry; assert PollenFaceDetailerAutoRetry.INPUT_TYPES()"
 
 # ------------------------------------------------------------
 # PREVIEW COMFYUI
@@ -113,7 +128,7 @@ RUN python -m py_compile \
     /opt/pollen/face_asset_cache.py \
     /opt/pollen/preview_bridge.py \
     /opt/pollen/preview_handler.py \
-    /comfyui/custom_nodes/z_pollen_face_detailer_retry/__init__.py
+    /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/pollen_face_detailer_retry.py
 
 
 # Remplace la commande de démarrage officielle :
