@@ -11,8 +11,9 @@ MODULE_PATH = Path(__file__).with_name("pollen_face_detailer_retry.py")
 
 
 class PollenFaceDetailerRetryTests(unittest.TestCase):
-    def _load_module(self):
+    def _load_module(self, retry_error=None):
         calls = []
+        fallback_calls = []
 
         class FakeRetryHook:
             def __init__(self, mean_threshold, variance_threshold):
@@ -27,12 +28,15 @@ class PollenFaceDetailerRetryTests(unittest.TestCase):
         class FakeDetailerForEach:
             @staticmethod
             def do_detail(*args, **kwargs):
-                return "original"
+                fallback_calls.append(kwargs)
+                return (args[0],)
 
         class FakeDetailerForEachAutoRetry:
             @staticmethod
             def do_detail(*args, **kwargs):
                 calls.append(kwargs)
+                if retry_error is not None:
+                    raise retry_error
                 return ("retried",)
 
         class FakeFaceDetailer:
@@ -46,7 +50,9 @@ class PollenFaceDetailerRetryTests(unittest.TestCase):
 
             def doit(self, **kwargs):
                 return FakeDetailerForEach.do_detail(
-                    kwargs["image"], detailer_hook=kwargs.get("detailer_hook")
+                    kwargs["image"],
+                    model=kwargs.get("model"),
+                    detailer_hook=kwargs.get("detailer_hook"),
                 )
 
         impact = types.ModuleType("impact")
@@ -70,10 +76,10 @@ class PollenFaceDetailerRetryTests(unittest.TestCase):
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-        return module, calls, FakeDetailerForEach, FakeRetryHook
+        return module, calls, fallback_calls, FakeDetailerForEach, FakeRetryHook
 
     def test_retries_with_same_face_detailer_inputs_and_restores_original(self):
-        module, calls, detailer, retry_hook = self._load_module()
+        module, calls, _, detailer, retry_hook = self._load_module()
         original_descriptor = detailer.__dict__["do_detail"]
 
         with patch.dict(os.environ, {}, clear=False):
@@ -86,13 +92,41 @@ class PollenFaceDetailerRetryTests(unittest.TestCase):
         self.assertIs(detailer.__dict__["do_detail"], original_descriptor)
 
     def test_exposes_the_original_face_detailer_schema(self):
-        module, _, _, _ = self._load_module()
+        module, _, _, _, _ = self._load_module()
         self.assertEqual(
             module.PollenFaceDetailerAutoRetry.INPUT_TYPES(),
             {"required": {"image": ("IMAGE",)}},
         )
 
+    def test_returns_source_image_when_all_patches_are_invalid(self):
+        module, calls, fallback_calls, detailer, _ = self._load_module(
+            RuntimeError("Max retries reached")
+        )
+        original_descriptor = detailer.__dict__["do_detail"]
+
+        with patch("builtins.print") as print_mock:
+            result = module.PollenFaceDetailerAutoRetry().doit(
+                image="source", model="loaded-model"
+            )
+
+        self.assertEqual(result, ("source",))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(fallback_calls[-1]["model"], "DUMMY")
+        self.assertIsNone(fallback_calls[-1]["detailer_hook"])
+        self.assertIn("2 invalid patches", print_mock.call_args.args[0])
+        self.assertIs(detailer.__dict__["do_detail"], original_descriptor)
+
+    def test_does_not_hide_unrelated_face_detail_errors(self):
+        module, _, _, detailer, _ = self._load_module(
+            RuntimeError("CUDA allocation failed")
+        )
+        original_descriptor = detailer.__dict__["do_detail"]
+
+        with self.assertRaisesRegex(RuntimeError, "CUDA allocation failed"):
+            module.PollenFaceDetailerAutoRetry().doit(image="source")
+
+        self.assertIs(detailer.__dict__["do_detail"], original_descriptor)
+
 
 if __name__ == "__main__":
     unittest.main()
-

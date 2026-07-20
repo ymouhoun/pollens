@@ -17,6 +17,7 @@ from impact.impact_pack import (
 
 
 _PATCH_LOCK = threading.RLock()
+_MAX_RETRIES_ERROR = "Max retries reached"
 
 
 def _env_int(name: str, fallback: int, minimum: int, maximum: int) -> int:
@@ -73,6 +74,22 @@ class PollenFaceDetailerAutoRetry:
             DetailerForEach.do_detail = staticmethod(retrying_do_detail)
             try:
                 return FaceDetailer().doit(**kwargs)
+            except Exception as error:
+                # Impact Pack deliberately raises after the last rejected
+                # patch. This is not a failed workflow: the safe result is the
+                # untouched source image. Never mask unrelated runtime errors.
+                if str(error) != _MAX_RETRIES_ERROR:
+                    raise
+
+                print(
+                    "pollen-face-detail - Face detail skipped after "
+                    f"{max_attempts} invalid patches; returning source image"
+                )
+                DetailerForEach.do_detail = original_descriptor
+                fallback_kwargs = dict(kwargs)
+                fallback_kwargs["model"] = "DUMMY"
+                fallback_kwargs.pop("detailer_hook", None)
+                return FaceDetailer().doit(**fallback_kwargs)
             finally:
                 DetailerForEach.do_detail = original_descriptor
 
@@ -84,4 +101,3 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PollenFaceDetailerAutoRetry": "FaceDetailer (Pollen auto retry)",
 }
-
