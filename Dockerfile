@@ -96,7 +96,12 @@ COPY --from=llm-enhancer-wheel-builder /wheelhouse/ /opt/llm-enhancer-wheelhouse
 RUN /opt/llm-enhancer-venv/bin/python -m pip install --no-cache-dir --no-deps \
         /opt/llm-enhancer-wheelhouse/llama_cpp_python-*.whl \
     && /opt/llm-enhancer-venv/bin/python -c \
-        "import llama_cpp; assert llama_cpp.__version__ == '0.3.34'; assert llama_cpp.llama_supports_gpu_offload()"
+        "from importlib.metadata import files, version; assert version('llama-cpp-python') == '0.3.34'; assert any('libggml-cuda' in str(path) for path in (files('llama-cpp-python') or ()))"
+
+# Ne pas importer llama_cpp pendant docker build : le driver libcuda.so.1 est
+# injecté par RunPod uniquement lorsqu'un worker possède réellement un GPU.
+# gpu_worker.py refait le contrôle dynamique llama_supports_gpu_offload() au
+# démarrage du worker, après détection du GPU et de son compute capability.
 
 
 # ------------------------------------------------------------
