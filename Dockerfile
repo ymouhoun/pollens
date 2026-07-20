@@ -5,7 +5,7 @@ ARG WORKER_VERSION=5.8.6
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.10"
+      org.opencontainers.image.version="0.2.11"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -97,11 +97,15 @@ RUN sed -i \
     && grep -q 'NODE_CLASS_MAPPINGS\["PollenFaceDetailerAutoRetry"\]' \
     /comfyui/custom_nodes/comfyui-impact-pack/__init__.py
 
-# Valide les imports réels au build, pas seulement la syntaxe Python. Cela
-# évite qu'un node absent ne soit découvert qu'au moment d'une requête.
-RUN cd /comfyui \
-    && PYTHONPATH=/comfyui:/comfyui/custom_nodes/comfyui-impact-pack/modules \
-    python -c "from impact.pollen_face_detailer_retry import PollenFaceDetailerAutoRetry; assert PollenFaceDetailerAutoRetry.INPUT_TYPES()"
+# Vérifie que la version installée d'Impact Pack expose toutes les API utilisées
+# par le wrapper. Ne pas importer Impact Pack isolément ici : son initialisation
+# dépend du cycle de chargement des custom nodes de ComfyUI.
+RUN grep -q '^class FaceDetailer' \
+        /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/impact_pack.py \
+    && grep -q '^class DetailerForEachAutoRetry' \
+        /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/impact_pack.py \
+    && grep -q '^class BlackPatchRetryHook' \
+        /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/hooks.py
 
 # ------------------------------------------------------------
 # PREVIEW COMFYUI
