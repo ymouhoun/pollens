@@ -5,7 +5,7 @@ ARG WORKER_VERSION=5.8.6
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.2.11"
+      org.opencontainers.image.version="0.2.12"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -17,7 +17,8 @@ ENV PYTHONUNBUFFERED=1 \
     POLLEN_PREVIEW_INTERVAL_MS=750 \
     POLLEN_STATUS_INTERVAL_MS=500 \
     POLLEN_PREVIEW_MAX_BYTES=500000 \
-    POLLEN_LORA_CACHE_MAX_ITEMS=5
+    POLLEN_LORA_CACHE_MAX_ITEMS=5 \
+    COMFY_EXTRA_ARGS=--highvram
 
 
 # Création explicite des dossiers que nous allons utiliser.
@@ -113,11 +114,12 @@ RUN grep -q '^class FaceDetailer' \
 # Active la génération des previews intermédiaires par ComfyUI.
 # Le worker Base44/RunPod devra ensuite transmettre ces images.
 RUN sed -i \
-    's/--disable-metadata/--disable-metadata --preview-method auto --preview-size 384/g' \
+    's/--disable-metadata/--disable-metadata ${COMFY_EXTRA_ARGS} --preview-method auto --preview-size 384/g' \
     /start.sh \
     && sed -i \
     's|python -u /handler.py|python -u /opt/pollen/preview_handler.py|g' \
     /start.sh \
+    && grep -q -- '${COMFY_EXTRA_ARGS}' /start.sh \
     && grep -q -- "--preview-method auto" /start.sh \
     && grep -q -- "/opt/pollen/preview_handler.py" /start.sh
 

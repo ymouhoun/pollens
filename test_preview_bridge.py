@@ -104,6 +104,23 @@ class PreviewBridgeTests(unittest.TestCase):
             ("refining_face", "Refining face", "Face Detail"),
         )
 
+    def test_reports_shark_sampler_as_sampling(self):
+        job = {
+            "input": {
+                "workflow": {
+                    "952": {
+                        "class_type": "SharkSampler_Beta",
+                        "inputs": {"steps": 40},
+                        "_meta": {"title": "SharkSampler"},
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            stage_for_node(job, "952"),
+            ("sampling", "Generating image", "SharkSampler"),
+        )
+
     def test_executing_event_publishes_node_stage(self):
         sent = []
         job = {
