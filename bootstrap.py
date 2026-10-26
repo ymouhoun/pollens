@@ -1,7 +1,10 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
+
+BOOTSTRAP_STARTED_AT = time.time()
 
 
 CACHE_ROOT = Path("/runpod-volume/huggingface-cache/hub")
@@ -121,7 +124,7 @@ def resolve_snapshot(model_id: str) -> Path:
     )
 
 
-def create_model_links(snapshot: Path) -> None:
+def create_model_links(snapshot: Path) -> list[str]:
     manifest_path = snapshot / MANIFEST_FILENAME
 
     if not manifest_path.is_file():
@@ -140,6 +143,7 @@ def create_model_links(snapshot: Path) -> None:
             f"'files' is missing or empty in {manifest_path}"
         )
 
+    targets: list[str] = []
     for item in files:
         if not isinstance(item, dict):
             raise RuntimeError(
@@ -151,6 +155,7 @@ def create_model_links(snapshot: Path) -> None:
 
         source = snapshot / source_relative
         target = COMFY_MODELS_ROOT / target_relative
+        targets.append(target_relative.as_posix())
 
         if not source.is_file():
             raise RuntimeError(
@@ -178,6 +183,27 @@ def create_model_links(snapshot: Path) -> None:
 
         log(f"Linked {target} -> {source}")
 
+    return targets
+
+
+def write_boot_timings(model_id: str, snapshot: Path, targets: list[str]) -> None:
+    """For the app's analytics: when the container's bootstrap ran and which checkpoint revision it linked."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from pollen_timings import write_boot_file
+
+        write_boot_file({
+            "bootstrapStartedAt": BOOTSTRAP_STARTED_AT,
+            "linksReadyAt": time.time(),
+            "modelId": model_id,
+            "revision": snapshot.name,
+            "checkpoints": [
+                Path(t).name for t in targets if t.startswith("diffusion_models/")
+            ],
+        })
+    except Exception as error:  # informative only, never blocks the start
+        log(f"Boot timings not written: {error}")
+
 
 def main() -> None:
     model_id = detect_model_id()
@@ -186,8 +212,9 @@ def main() -> None:
     snapshot = resolve_snapshot(model_id)
     log(f"Resolved snapshot: {snapshot}")
 
-    create_model_links(snapshot)
+    targets = create_model_links(snapshot)
     log("All model links created successfully")
+    write_boot_timings(model_id, snapshot, targets)
 
     # Remplace le processus Python par le démarrage officiel du worker.
     # Cela permet à RunPod de gérer correctement arrêt et redémarrage.

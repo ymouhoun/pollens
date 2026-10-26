@@ -47,7 +47,7 @@ RUN /opt/llama-build/bin/python /opt/verify_llama_cuda_wheel.py /wheelhouse
 FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
 
 LABEL org.opencontainers.image.title="pollens-worker" \
-      org.opencontainers.image.version="0.3.0"
+      org.opencontainers.image.version="0.4.0"
 
 # Configuration générale
 ENV PYTHONUNBUFFERED=1 \
@@ -193,13 +193,14 @@ RUN sed -i \
 
 
 # Ajout du bootstrap modèles, du cache de LoRAs et des previews progressives.
-COPY bootstrap.py face_asset_cache.py preview_bridge.py preview_handler.py /opt/pollen/
+COPY bootstrap.py face_asset_cache.py pollen_timings.py preview_bridge.py preview_handler.py /opt/pollen/
 
 
 # Vérifie pendant le build que les scripts Python sont syntaxiquement valides.
 RUN python -m py_compile \
     /opt/pollen/bootstrap.py \
     /opt/pollen/face_asset_cache.py \
+    /opt/pollen/pollen_timings.py \
     /opt/pollen/preview_bridge.py \
     /opt/pollen/preview_handler.py \
     /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/pollen_face_detailer_retry.py \

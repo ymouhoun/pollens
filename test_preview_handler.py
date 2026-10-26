@@ -108,6 +108,11 @@ def handler(job):
             )
         )
         self.assertEqual(updates[2][1]["stage"], "finalizing")
+        timings = result["pollenTimings"]
+        self.assertEqual(timings["version"], 1)
+        self.assertIsInstance(timings["job"]["receivedAt"], int)
+        self.assertIsInstance(timings["job"]["finishedAt"], int)
+        self.assertEqual(timings["steps"], 20)
 
 
 if __name__ == "__main__":
