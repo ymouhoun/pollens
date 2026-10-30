@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "source": "weights/qwen_image_2.1_int8_convrot.safetensors",
+      "target": "diffusion_models/qwen_image_2.1_int8_convrot.safetensors"
+    },
+    {
+      "source": "weights/qwen3vl_8b_int8_convrot.safetensors",
+      "target": "text_encoders/qwen3vl_8b_int8_convrot.safetensors"
+    },
+    {
+      "source": "weights/qwen_image_2.1_vae_bf16.safetensors",
+      "target": "vae/qwen_image_2.1_vae_bf16.safetensors"
+    },
+    {
+      "source": "weights/sam3.1_multiplex_fp16.safetensors",
+      "target": "checkpoints/sam3.1_multiplex_fp16.safetensors"
+    }
+  ]
+}

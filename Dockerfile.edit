@@ -1,0 +1,110 @@
+# Worker de l'endpoint d'édition produit (pollens-edit).
+#
+# Rôle : détection de la pièce (SAM 3.1), rédaction des textes (Qwen3-VL 8B),
+# insertion du produit (Qwen-Image-2.1) et recollage dans l'image d'origine.
+# L'harmonisation par le fine-tune n'a PAS lieu ici : elle est renvoyée à
+# l'endpoint du modèle d'origine, qui a déjà son checkpoint en cache.
+#
+# Aucun custom node : tout est natif dans ComfyUI >= 0.38. Les poids viennent du
+# dépôt Hugging Face de l'endpoint (HF_MODEL_ID=ymouhoun/pollens-edit), reliés
+# par bootstrap.py comme pour les autres endpoints.
+#
+# Construit depuis la branche worker-edit, Dockerfile Path = Dockerfile.edit,
+# pour qu'aucune modification ici ne reconstruise les 7 endpoints de génération.
+
+# worker-comfyui 5.10.0 : dernière image de base publiée (septembre 2026).
+# Elle embarque ComfyUI 0.34, trop ancien pour Qwen-Image-2.1 : on remplace
+# le code de ComfyUI par une version figée ci-dessous.
+ARG WORKER_VERSION=5.10.0
+FROM runpod/worker-comfyui:${WORKER_VERSION}-base-cuda12.8.1
+
+# Version de ComfyUI validée pour ce workflow (Qwen-Image-2.1, SAM3_Detect,
+# TextGenerate, StringFormat). Ne pas remplacer par une branche mouvante.
+ARG COMFYUI_REF=v0.42.5
+
+LABEL org.opencontainers.image.title="pollens-edit-worker" \
+      org.opencontainers.image.version="0.1.0"
+
+ENV PYTHONUNBUFFERED=1 \
+    COMFY_LOG_LEVEL=INFO \
+    REFRESH_WORKER=false \
+    HF_HUB_OFFLINE=0 \
+    TRANSFORMERS_OFFLINE=1 \
+    POLLEN_PREVIEW_ENABLED=true \
+    POLLEN_PREVIEW_INTERVAL_MS=750 \
+    POLLEN_STATUS_INTERVAL_MS=500 \
+    POLLEN_PREVIEW_MAX_BYTES=500000 \
+    COMFY_EXTRA_ARGS=--highvram
+
+# ------------------------------------------------------------
+# COMFYUI FIGÉ
+# ------------------------------------------------------------
+# Remplace le code de ComfyUI en gardant models/, custom_nodes/, input/,
+# output/, user/ et extra_model_paths.yaml. Torch (2.11 cu128) vient de l'image
+# de base et satisfait le `torch` nu des requirements de ComfyUI. Les bornes
+# transformers<5 et huggingface-hub<1.0 de l'image de base sont reconduites.
+RUN set -eux; \
+    mkdir -p /tmp/comfy-src; \
+    wget -qO- "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags/${COMFYUI_REF}.tar.gz" \
+        | tar -xz -C /tmp/comfy-src --strip-components=1; \
+    cd /comfyui; \
+    find . -mindepth 1 -maxdepth 1 \
+        ! -name models ! -name custom_nodes ! -name input ! -name output \
+        ! -name user ! -name extra_model_paths.yaml ! -name .venv \
+        -exec rm -rf {} +; \
+    cp -a /tmp/comfy-src/. /comfyui/; \
+    rm -rf /tmp/comfy-src; \
+    uv pip install -r /comfyui/requirements.txt \
+        "transformers>=4.50.3,<5" "huggingface-hub<1.0"
+
+# Échec immédiat du build si ComfyUI ne démarre pas, ou si l'un des nœuds
+# natifs du workflow d'édition manque dans cette version.
+RUN cd /comfyui && timeout 300 python main.py --quick-test-for-ci --cpu
+RUN set -eux; \
+    grep -q 'node_id="TextEncodeQwenImage21"' /comfyui/comfy_extras/nodes_qwen.py; \
+    grep -q 'node_id="QwenImage21Cache"' /comfyui/comfy_extras/nodes_qwen.py; \
+    grep -q 'node_id="SAM3_Detect"' /comfyui/comfy_extras/nodes_sam3.py; \
+    grep -q 'node_id="TextGenerate"' /comfyui/comfy_extras/nodes_textgen.py; \
+    grep -q 'node_id="StringFormat"' /comfyui/comfy_extras/nodes_string.py
+
+# Nœud maison : étalonnage de la pièce éditée sur l'image d'origine (torch seul, aucune dépendance)
+COPY pollens_nodes /comfyui/custom_nodes/pollens_nodes
+RUN cd /comfyui \
+    && PYTHONPATH=/comfyui:/comfyui/custom_nodes python -c \
+        "import pollens_nodes as p; assert 'PollensMatchGrade' in p.NODE_CLASS_MAPPINGS"
+
+RUN mkdir -p \
+    /opt/pollen \
+    /opt/pollen/face-cache \
+    /comfyui/models/checkpoints \
+    /comfyui/models/diffusion_models \
+    /comfyui/models/text_encoders \
+    /comfyui/models/vae
+
+# ------------------------------------------------------------
+# PREVIEWS, STATUTS ET TEXTES
+# ------------------------------------------------------------
+# Même branchement que le worker de génération : previews progressives,
+# statuts granulaires, et renvoi des textes nommés « pollen-text:<clé> ».
+RUN sed -i \
+    's/--disable-metadata/--disable-metadata ${COMFY_EXTRA_ARGS} --preview-method auto --preview-size 384/g' \
+    /start.sh \
+    && sed -i \
+    's|python -u /handler.py|python -u /opt/pollen/preview_handler.py|g' \
+    /start.sh \
+    && grep -q -- '${COMFY_EXTRA_ARGS}' /start.sh \
+    && grep -q -- "--preview-method auto" /start.sh \
+    && grep -q -- "/opt/pollen/preview_handler.py" /start.sh
+
+COPY bootstrap.py face_asset_cache.py preview_bridge.py preview_handler.py remote_images.py /opt/pollen/
+
+RUN python -m py_compile \
+    /opt/pollen/bootstrap.py \
+    /opt/pollen/face_asset_cache.py \
+    /opt/pollen/preview_bridge.py \
+    /opt/pollen/preview_handler.py \
+    /opt/pollen/remote_images.py
+
+# 1. bootstrap.py relie les poids du snapshot HF mis en cache vers /comfyui/models
+# 2. bootstrap.py lance ensuite /start.sh
+CMD ["python", "/opt/pollen/bootstrap.py"]
