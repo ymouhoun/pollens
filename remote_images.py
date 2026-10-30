@@ -25,9 +25,19 @@ class RemoteImageError(ValueError):
     pass
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A signed address answers with the file itself: a redirect is refused, so it cannot lead anywhere else."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def _fetch(url: str) -> tuple[bytes, str]:
     request = urllib.request.Request(url, headers={"User-Agent": "pollens-worker"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:  # noqa: S310 (https checked above)
+    with _opener.open(request, timeout=TIMEOUT_S) as response:  # https checked by the caller
         content_type = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         data = response.read(MAX_BYTES + 1)
     return data, content_type
