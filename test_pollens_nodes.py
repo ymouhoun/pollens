@@ -41,5 +41,36 @@ class MatchGradeTests(unittest.TestCase):
         self.assertIn("inchangée", report)
 
 
+@unittest.skipIf(torch is None, "torch not installed")
+class CropTests(unittest.TestCase):
+    def test_crop_keeps_proportions_and_comes_back_in_place(self):
+        from pollens_nodes import PollensCropToMask, PollensUncrop
+        H, W = 1536, 1152
+        image = torch.rand(1, H, W, 3)
+        mask = torch.zeros(1, H, W)
+        mask[0, 900:1100, 500:600] = 1  # a small bottle
+        crop, cmask, box, report = PollensCropToMask().run(image, mask, 0.6, 768)
+        self.assertEqual(crop.shape[1:3], (box["h"], box["w"]))
+        self.assertTrue(torch.equal(crop, image[:, box["y"]:box["y"] + box["h"], box["x"]:box["x"] + box["w"]]))
+        self.assertEqual(cmask.sum().item(), mask.sum().item(), "the whole piece is in the crop")
+        self.assertGreaterEqual(min(box["w"], box["h"]), 768)
+        # the model's output comes back at another size: scaled back uniformly into the same place
+        edited = torch.nn.functional.interpolate(crop.movedim(-1, 1), scale_factor=2.0, mode="bilinear").movedim(1, -1)
+        (out,) = PollensUncrop().run(image, edited, box)
+        self.assertEqual(out.shape, image.shape)
+        outside = torch.ones(H, W, dtype=torch.bool)
+        outside[box["y"]:box["y"] + box["h"], box["x"]:box["x"] + box["w"]] = False
+        self.assertTrue(torch.equal(out[0][outside], image[0][outside]), "nothing changes outside the crop")
+        self.assertIn("recadrage", report)
+
+    def test_box_stays_inside_the_image_and_empty_mask_takes_all(self):
+        from pollens_nodes import crop_box
+        m = torch.zeros(400, 300)
+        m[380:400, 280:300] = 1
+        b = crop_box(m, 400, 300, 0.6, 256)
+        self.assertTrue(0 <= b["x"] and b["x"] + b["w"] <= 300 and 0 <= b["y"] and b["y"] + b["h"] <= 400)
+        self.assertEqual(crop_box(torch.zeros(400, 300), 400, 300)["w"], 300)
+
+
 if __name__ == "__main__":
     unittest.main()

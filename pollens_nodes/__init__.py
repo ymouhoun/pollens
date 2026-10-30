@@ -144,5 +144,97 @@ class PollensMatchGrade:
         return (torch.stack(out), "\n".join(reports))
 
 
-NODE_CLASS_MAPPINGS = {"PollensMatchGrade": PollensMatchGrade}
-NODE_DISPLAY_NAME_MAPPINGS = {"PollensMatchGrade": "Pollens · Étalonnage de la pièce"}
+# ---------------------------------------------------------------------------------------------------------------------
+# Crop around the piece, then put the result back: in a still life the product is small in the frame, and its label
+# would be drawn with a few dozen pixels. Qwen-Image-2.1 works on a crop around the product instead (the crop is brought
+# up to its resolution budget), and the result is scaled back down into the same place. The crop keeps the image's
+# proportions (one scale for both axes): the product is never stretched.
+
+def _bbox(mask2d, threshold=0.5):
+    ys, xs = torch.nonzero(mask2d > threshold, as_tuple=True)
+    if ys.numel() == 0:
+        return None
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
+def crop_box(mask2d, H, W, padding=0.6, min_size=768, multiple=16):
+    """The box around the mask, widened by `padding` × its size on each side, at least min_size, inside the image."""
+    b = _bbox(mask2d)
+    if b is None:
+        return {"x": 0, "y": 0, "w": W, "h": H, "W": W, "H": H}
+    x0, y0, x1, y1 = b
+    bw, bh = x1 - x0, y1 - y0
+    w = min(W, max(min_size, int(round(bw * (1 + 2 * padding)))))
+    h = min(H, max(min_size, int(round(bh * (1 + 2 * padding)))))
+    w = min(W, (w + multiple - 1) // multiple * multiple)
+    h = min(H, (h + multiple - 1) // multiple * multiple)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    x = int(round(cx - w / 2))
+    y = int(round(cy - h / 2))
+    x = max(0, min(W - w, x))
+    y = max(0, min(H - h, y))
+    return {"x": x, "y": y, "w": w, "h": h, "W": W, "H": H}
+
+
+class PollensCropToMask:
+    CATEGORY = "Pollens"
+    RETURN_TYPES = ("IMAGE", "MASK", "POLLENS_BOX", "STRING")
+    RETURN_NAMES = ("image", "mask", "box", "rapport")
+    FUNCTION = "run"
+    DESCRIPTION = "Recadre l'image autour du masque (avec du contexte), sans déformer : à recoller avec Pollens · Recoller le recadrage."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "image": ("IMAGE",),
+            "mask": ("MASK",),
+            "padding": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 4.0, "step": 0.05,
+                                  "tooltip": "Contexte ajouté de chaque côté, en part de la taille de la pièce."}),
+            "min_size": ("INT", {"default": 768, "min": 64, "max": 8192, "step": 16,
+                                 "tooltip": "Côté minimal du recadrage (px de l'image d'origine)."}),
+        }}
+
+    def run(self, image, mask, padding, min_size):
+        _, H, W, _ = image.shape
+        m = _fit(mask, H, W)[0]
+        box = crop_box(m, H, W, padding, min_size)
+        x, y, w, h = box["x"], box["y"], box["w"], box["h"]
+        crop = image[:, y:y + h, x:x + w, :]
+        cmask = _fit(mask, H, W)[:, y:y + h, x:x + w]
+        share = (w * h) / float(W * H)
+        return (crop, cmask, box, f"recadrage {w}×{h} à ({x}, {y}) dans {W}×{H} ({share:.0%} de l'image)")
+
+
+class PollensUncrop:
+    CATEGORY = "Pollens"
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "run"
+    DESCRIPTION = "Remet le résultat d'un recadrage (à n'importe quelle taille) à sa place dans l'image entière."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"destination": ("IMAGE",), "source": ("IMAGE",), "box": ("POLLENS_BOX",)}}
+
+    def run(self, destination, source, box):
+        out = destination.clone()
+        _, H, W, _ = out.shape
+        if (box["W"], box["H"]) != (W, H):
+            raise ValueError(f"Le recadrage a été fait sur une image {box['W']}×{box['H']}, pas {W}×{H}")
+        x, y, w, h = box["x"], box["y"], box["w"], box["h"]
+        src = source[: out.shape[0]].movedim(-1, 1).float()
+        src = F.interpolate(src, size=(h, w), mode="bicubic", align_corners=False, antialias=True).clamp(0, 1)
+        out[:, y:y + h, x:x + w, :] = src.movedim(1, -1).to(out)
+        return (out,)
+
+
+NODE_CLASS_MAPPINGS = {
+    "PollensMatchGrade": PollensMatchGrade,
+    "PollensCropToMask": PollensCropToMask,
+    "PollensUncrop": PollensUncrop,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "PollensMatchGrade": "Pollens · Étalonnage de la pièce",
+    "PollensCropToMask": "Pollens · Recadrer autour de la pièce",
+    "PollensUncrop": "Pollens · Recoller le recadrage",
+}
