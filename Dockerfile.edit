@@ -40,7 +40,11 @@ ENV PYTHONUNBUFFERED=1 \
 # COMFYUI FIGÉ
 # ------------------------------------------------------------
 # Remplace le code de ComfyUI en gardant models/, custom_nodes/, input/,
-# output/, user/ et extra_model_paths.yaml. Torch (2.11 cu128) vient de l'image
+# output/, user/ et extra_model_paths.yaml. Les dépendances sont installées dans
+# l'interpréteur même qui lance ComfyUI (--python) : l'image de base en a plus d'un,
+# et un premier build avait mis comfy-aimdo 0.5.6 dans l'autre (« No module named
+# comfy_aimdo.storage » au démarrage) ; comfy-aimdo est aussi réinstallé, et l'endroit
+# d'où Python le charge est affiché dans les logs du build. Torch (2.11 cu128) vient de l'image
 # de base et satisfait le `torch` nu des requirements de ComfyUI. Les bornes
 # transformers<5 et huggingface-hub<1.0 de l'image de base sont reconduites.
 RUN set -eux; \
@@ -54,8 +58,12 @@ RUN set -eux; \
         -exec rm -rf {} +; \
     cp -a /tmp/comfy-src/. /comfyui/; \
     rm -rf /tmp/comfy-src; \
-    uv pip install -r /comfyui/requirements.txt \
-        "transformers>=4.50.3,<5" "huggingface-hub<1.0"
+    PY="$(command -v python)"; \
+    echo "ComfyUI runs with: $PY ($("$PY" -c 'import sys; print(sys.prefix)'))"; \
+    uv pip install --python "$PY" --reinstall-package comfy-aimdo -r /comfyui/requirements.txt \
+        "transformers>=4.50.3,<5" "huggingface-hub<1.0"; \
+    "$PY" -c "import importlib.util as u; print('comfy_aimdo found in', list(u.find_spec('comfy_aimdo').submodule_search_locations))"; \
+    "$PY" -c "import comfy_aimdo.storage, comfy_kitchen, transformers; print('comfy_aimdo.storage OK | transformers', transformers.__version__)"
 
 # Échec immédiat du build si ComfyUI ne démarre pas, ou si l'un des nœuds
 # natifs du workflow d'édition manque dans cette version.
