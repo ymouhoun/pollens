@@ -193,7 +193,7 @@ RUN sed -i \
 
 
 # Ajout du bootstrap modèles, du cache de LoRAs et des previews progressives.
-COPY bootstrap.py face_asset_cache.py preview_bridge.py preview_handler.py /opt/pollen/
+COPY bootstrap.py face_asset_cache.py preview_bridge.py preview_handler.py remote_images.py /opt/pollen/
 
 
 # Vérifie pendant le build que les scripts Python sont syntaxiquement valides.
@@ -202,6 +202,7 @@ RUN python -m py_compile \
     /opt/pollen/face_asset_cache.py \
     /opt/pollen/preview_bridge.py \
     /opt/pollen/preview_handler.py \
+    /opt/pollen/remote_images.py \
     /comfyui/custom_nodes/comfyui-impact-pack/modules/impact/pollen_face_detailer_retry.py \
     /comfyui/custom_nodes/prompt_enhancer_V2/enhancer_node.py \
     /comfyui/custom_nodes/prompt_enhancer_V2/gpu_runtime.py \

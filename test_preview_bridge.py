@@ -8,6 +8,7 @@ from unittest.mock import patch
 from preview_bridge import (
     PreviewBridge,
     decode_binary_preview,
+    extract_named_texts,
     extract_prompt_enhancer_metadata,
     extract_progress,
     stage_for_node,
@@ -70,6 +71,51 @@ class PreviewBridgeTests(unittest.TestCase):
                 "enhancerPreset": "ambrojo_bw",
             },
         )
+
+    def test_extracts_named_texts_from_preview_nodes(self):
+        job = {
+            "input": {
+                "workflow": {
+                    "106": {"class_type": "PreviewAny", "_meta": {"title": "pollen-text:description"}},
+                    "114": {"class_type": "PreviewAny", "_meta": {"title": "pollen-text:harmonize"}},
+                    "200": {"class_type": "PreviewAny", "_meta": {"title": "Debug"}},
+                }
+            }
+        }
+        history = {
+            "prompt-id": {
+                "outputs": {
+                    "106": {"text": ["A cream knit cardigan."]},
+                    "114": {"text": ["Editorial photograph. A young woman..."]},
+                    "200": {"text": ["ignored"]},
+                }
+            }
+        }
+        self.assertEqual(
+            extract_named_texts(job, history),
+            {
+                "description": "A cream knit cardigan.",
+                "harmonize": "Editorial photograph. A young woman...",
+            },
+        )
+
+    def test_named_texts_absent_without_titled_nodes(self):
+        job = {"input": {"workflow": {"1": {"class_type": "KSampler"}}}}
+        self.assertEqual(extract_named_texts(job, {"p": {"outputs": {}}}), {})
+
+    def test_reports_edit_stages(self):
+        job = {
+            "input": {
+                "workflow": {
+                    "105": {"class_type": "TextGenerate", "_meta": {"title": "Description"}},
+                    "62": {"class_type": "SAM3_Detect", "_meta": {"title": "Detect item"}},
+                    "151": {"class_type": "PollensMatchGrade", "_meta": {"title": "Match the item's colour"}},
+                }
+            }
+        }
+        self.assertEqual(stage_for_node(job, "105")[0], "writing_edit_texts")
+        self.assertEqual(stage_for_node(job, "62")[0], "segmenting_item")
+        self.assertEqual(stage_for_node(job, "151")[0], "matching_colour")
 
     def test_publishes_data_uri_and_throttles(self):
         sent = []
