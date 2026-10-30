@@ -29,6 +29,10 @@ STAGE_LABELS = {
     "queueing_workflow": "Sending workflow to ComfyUI",
     "workflow_queued": "Workflow queued",
     "enhancing_prompt": "Enhancing prompt · Qwen 8B",
+    "writing_edit_texts": "Writing edit instructions · Qwen3-VL",
+    "segmenting_item": "Detecting the item",
+    "matching_colour": "Matching the item's colour",
+    "downloading_inputs": "Downloading input images",
     "loading_models": "Loading models",
     "detecting_face": "Detecting face",
     "refining_face": "Refining face",
@@ -59,6 +63,12 @@ def stage_for_node(job: dict[str, Any], node_id: Any) -> tuple[str, str, str]:
 
     if "llmpromptenhancer" in searchable or "prompt enhancer" in searchable:
         stage = "enhancing_prompt"
+    elif class_type.lower() == "textgenerate":
+        stage = "writing_edit_texts"
+    elif class_type.lower() == "sam3_detect":
+        stage = "segmenting_item"
+    elif class_type == "PollensMatchGrade":
+        stage = "matching_colour"
     elif any(
         token in searchable
         for token in (
@@ -149,6 +159,47 @@ def extract_prompt_enhancer_metadata(
         break
 
     return metadata
+
+
+NAMED_TEXT_PREFIX = "pollen-text:"
+
+
+def extract_named_texts(job: dict[str, Any], history: Any) -> dict[str, str]:
+    """Collect the texts a workflow exposes for the app.
+
+    A workflow names a text by giving a PreviewAny node the title
+    ``pollen-text:<key>``; the text it shows is returned under ``<key>``.
+    The edit workflow uses this to send back the item description, the
+    Qwen-Image-2.1 instruction and the rewritten harmonisation prompt.
+    """
+    workflow = job.get("input", {}).get("workflow", {})
+    if not isinstance(workflow, dict):
+        return {}
+
+    keys: dict[str, str] = {}
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        metadata = node.get("_meta") if isinstance(node.get("_meta"), dict) else {}
+        title = str(metadata.get("title") or "")
+        if title.startswith(NAMED_TEXT_PREFIX):
+            key = title[len(NAMED_TEXT_PREFIX):].strip()
+            if key:
+                keys[str(node_id)] = key
+    if not keys:
+        return {}
+
+    texts: dict[str, str] = {}
+    for outputs in _history_output_maps(history):
+        for node_id, key in keys.items():
+            if key in texts:
+                continue
+            node_output = outputs.get(node_id)
+            if isinstance(node_output, dict):
+                text = _first_history_text(node_output.get("text"))
+                if text is not None:
+                    texts[key] = text
+    return texts
 
 
 def _positive_int(value: Any, default: int) -> int:

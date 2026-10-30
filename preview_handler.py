@@ -11,7 +11,12 @@ from typing import Any
 import runpod
 
 from face_asset_cache import ensure_face_dependencies
-from preview_bridge import PreviewBridge, extract_prompt_enhancer_metadata
+from remote_images import RemoteImageError, inline_remote_images
+from preview_bridge import (
+    PreviewBridge,
+    extract_named_texts,
+    extract_prompt_enhancer_metadata,
+)
 
 
 UPSTREAM_HANDLER_PATH = os.environ.get(
@@ -145,15 +150,24 @@ def handler(job: dict[str, Any]):
             )
 
         ensure_face_dependencies(job, status_callback=face_asset_status)
+        # images given by signed address (product edit): downloaded here, then handled as before
+        try:
+            inline_remote_images(
+                job,
+                status=lambda name: bridge.publish_stage(
+                    "downloading_inputs", "Downloading input images", name
+                ),
+            )
+        except RemoteImageError as error:
+            return {"error": str(error)}
         print("pollen-preview - Structured ComfyUI progress enabled")
         result = upstream.handler(job)
         if isinstance(result, dict):
-            result.update(
-                extract_prompt_enhancer_metadata(
-                    job,
-                    getattr(_context, "prompt_history", None),
-                )
-            )
+            history = getattr(_context, "prompt_history", None)
+            result.update(extract_prompt_enhancer_metadata(job, history))
+            texts = extract_named_texts(job, history)
+            if texts:
+                result["texts"] = texts
         return result
     finally:
         if hasattr(_context, "preview_bridge"):
